@@ -9,12 +9,7 @@ using UnityEngine.Networking;
 using System.Collections;
 using System.Text;
 
-/// <summary>
-/// ESP32 TCP 接收 + 直接调用 Coze API（替代本地 Flask）
-/// - 功能保持：RawImage 实时显示、按钮截图上传分析、结果三段文本并高亮、按钮颜色反馈与超时
-/// - 注意：代码里直接包含 API Key，仅用于内网/测试。正式发版请做密钥保护！
-/// </summary>
-public class ESP32AIAssistant : MonoBehaviour
+public class AIAssistant : MonoBehaviour
 {
     [Header("UI组件")]
     public Button aiAssistantButton;
@@ -23,12 +18,10 @@ public class ESP32AIAssistant : MonoBehaviour
     public TMP_Text introductionText;
     public TMP_Text analysisText;
 
-    [Header("ESP32设置")]
-    public string esp32IP = "192.168.223.59";
+    [Header("ip设置")]
+    public string esp32IP = "192.168.223.238";
     public int esp32Port = 8080;
 
-    [Header("（已弃用）本地分析API设置")]
-    [Tooltip("已不再使用，仅为兼容 Inspector 不删字段")]
     public string analysisAPI = "";
     public float timeout = 30f;
 
@@ -40,7 +33,7 @@ public class ESP32AIAssistant : MonoBehaviour
     public float highlightDuration = 0.5f;
 
     // ===== Coze API 配置（使用你给的设置）=====
-    const string COZE_API_KEY = "pat_LSf8ZowN3ttFWUS7YW34tXRZF9Di3VNIIQvL5hA51pwwMA0q5SR6BzcrowPSf6Ag";
+    const string COZE_API_KEY = "pat_amzSXxLKssT22HvzRswyVMKoco0R4QfKSdT1nwX09JTzoGKHV3qzaAxJwI8U7Cz6";
     const string COZE_FILE_UPLOAD_URL = "https://api.coze.cn/v1/files/upload";
     const string COZE_CHAT_BASE = "https://api.coze.cn/v3";
     const string COZE_BOT_ID = "7531000023556046875";

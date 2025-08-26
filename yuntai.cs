@@ -1,83 +1,126 @@
-using System.Net.Sockets;
-using System.Text;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using System.Net.Sockets;
+using System.Text;
+using System.Threading.Tasks;
 
-public class Pico4DirectJoystickTCP : MonoBehaviour
+public class ServoUIController_UDLR : MonoBehaviour
 {
-    public string esp32IP = "192.168.223.156";
-    public int esp32Port = 8080;
+    public string serverIP = "192.168.223.238";
+    public int serverPort = 8082;
 
-    private TcpClient client;
+    private TcpClient tcpClient;
     private NetworkStream stream;
+    private bool connected = false;
 
-    void Start()
+    public int servoTopID = 9;
+    public int servoTopMin = -5;
+    public int servoTopMax = 50;
+
+    public int servoBaseID = 10;
+    public int servoBaseMin = 30;
+    public int servoBaseMax = 150;
+
+    public int stepAngle = 1;
+
+    private int currentTopAngle = 20;
+    private int currentBaseAngle = 90;
+
+    // 上一次按键状态
+    private bool upPrev, downPrev, leftPrev, rightPrev;
+
+    private void Start()
     {
-        ConnectToESP32();
+        Connect();
     }
 
-    void Update()
-    {
-        if (client == null || !client.Connected) return;
-
-        var gamepad = Gamepad.current;
-        if (gamepad == null) return;
-
-        // 左摇杆
-        float ly = gamepad.leftStick.y.ReadValue();  // -1下 0中 1上
-        float lx = gamepad.leftStick.x.ReadValue();  // -1左 0中 1右
-        // 右摇杆
-        float ry = gamepad.rightStick.y.ReadValue();
-        float rx = gamepad.rightStick.x.ReadValue();
-
-        // 水平映射舵机2 (水平)
-        float servo2Angle = MapStickToServo(lx, rx, 20f, 90f, 160f);
-
-        // 垂直映射舵机1 (竖直)
-        float servo1Angle = MapStickToServo(ly, ry, 20f, 40f, 90f);
-
-        // 构造 JSON 并发送
-        string json = $"{{\"servo1\":{(int)servo1Angle},\"servo2\":{(int)servo2Angle}}}\n";
-        SendMessage(json);
-    }
-
-    float MapStickToServo(float stick1, float stick2, float min, float mid, float max)
-    {
-        // 两个摇杆取平均
-        float val = (stick1 + stick2) / 2f;
-
-        // 线性映射
-        if (val > 0)
-            return Mathf.Lerp(mid, max, val);  // 0~1映射到 mid~max
-        else
-            return Mathf.Lerp(mid, min, -val); // -1~0映射到 min~mid
-    }
-
-    void ConnectToESP32()
+    private async void Connect()
     {
         try
         {
-            client = new TcpClient();
-            client.Connect(esp32IP, esp32Port);
-            stream = client.GetStream();
-            Debug.Log("Connected to ESP32 TCP server");
+            tcpClient?.Close();
+            tcpClient = new TcpClient();
+            await tcpClient.ConnectAsync(serverIP, serverPort);
+            stream = tcpClient.GetStream();
+            connected = true;
+            Debug.Log($"成功连接舵机服务器 {serverIP}:{serverPort}");
         }
         catch (System.Exception e)
         {
-            Debug.LogError("TCP连接失败: " + e.Message);
+            Debug.LogError($"连接舵机服务器失败: {e.Message}");
+            connected = false;
         }
     }
 
-    new void SendMessage(string message)
+    private void Update()
     {
-        if (stream == null) return;
-        byte[] data = Encoding.ASCII.GetBytes(message);
-        stream.Write(data, 0, data.Length);
+        var gamepad = Gamepad.current;
+        var keyboard = Keyboard.current;
+
+        bool upPressed = false;
+        bool downPressed = false;
+        bool leftPressed = false;
+        bool rightPressed = false;
+
+        if (gamepad != null)
+        {
+            upPressed |= gamepad.dpad.up.isPressed;
+            downPressed |= gamepad.dpad.down.isPressed;
+            leftPressed |= gamepad.dpad.left.isPressed;
+            rightPressed |= gamepad.dpad.right.isPressed;
+        }
+
+        if (keyboard != null)
+        {
+            upPressed |= keyboard.upArrowKey.isPressed || keyboard.wKey.isPressed;
+            downPressed |= keyboard.downArrowKey.isPressed || keyboard.sKey.isPressed;
+            leftPressed |= keyboard.leftArrowKey.isPressed || keyboard.aKey.isPressed;
+            rightPressed |= keyboard.rightArrowKey.isPressed || keyboard.dKey.isPressed;
+        }
+
+        // 仅在按下瞬间触发
+        if (upPressed && !upPrev) { currentTopAngle += stepAngle; SendServoCommand(servoTopID, currentTopAngle); }
+        if (downPressed && !downPrev) { currentTopAngle -= stepAngle; SendServoCommand(servoTopID, currentTopAngle); }
+        if (leftPressed && !leftPrev) { currentBaseAngle -= stepAngle; SendServoCommand(servoBaseID, currentBaseAngle); }
+        if (rightPressed && !rightPrev) { currentBaseAngle += stepAngle; SendServoCommand(servoBaseID, currentBaseAngle); }
+
+        upPrev = upPressed;
+        downPrev = downPressed;
+        leftPrev = leftPressed;
+        rightPrev = rightPressed;
+
+        currentTopAngle = Mathf.Clamp(currentTopAngle, servoTopMin, servoTopMax);
+        currentBaseAngle = Mathf.Clamp(currentBaseAngle, servoBaseMin, servoBaseMax);
+    }
+
+    private async void SendServoCommand(int servoID, int angle)
+    {
+        if (!connected || stream == null)
+        {
+            Debug.LogWarning("舵机未连接，尝试重连...");
+            await Task.Delay(100);
+            Connect();
+            return;
+        }
+
+        try
+        {
+            string command = $"{servoID} {angle}\n";
+            byte[] data = Encoding.UTF8.GetBytes(command);
+            await stream.WriteAsync(data, 0, data.Length);
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"发送舵机命令失败: {e.Message}");
+            connected = false;
+            Connect();
+        }
     }
 
     private void OnApplicationQuit()
     {
         if (stream != null) stream.Close();
-        if (client != null) client.Close();
+        if (tcpClient != null) tcpClient.Close();
+        connected = false;
     }
 }
