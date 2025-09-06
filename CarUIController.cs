@@ -23,7 +23,6 @@ public class CarUIController : MonoBehaviour
     [Header("视觉反馈")]
     public Color normalColor = Color.white;
     public Color activeColor = Color.green;
-    public float highlightDuration = 0.3f;
 
     [Header("TCP 设置")]
     public string serverIP = "192.168.223.238";
@@ -31,13 +30,12 @@ public class CarUIController : MonoBehaviour
 
     [Header("心跳设置")]
     [Tooltip("心跳间隔时间（秒）")]
-    public float heartbeatInterval = 5f;   // Inspector 可调心跳间隔
+    public float heartbeatInterval = 5f;
 
     private TcpClient tcpClient;
     private NetworkStream stream;
     private bool connected = false;
-    private Coroutine highlightCoroutine;
-    private Coroutine heartbeatCoroutine;   // 心跳协程
+    private Coroutine heartbeatCoroutine;
 
     private List<XRDevice> rightHandDevices = new List<XRDevice>();
     private List<XRDevice> leftHandDevices = new List<XRDevice>();
@@ -52,32 +50,34 @@ public class CarUIController : MonoBehaviour
         leftButton.onClick.AddListener(() => SendCommand("3"));
         rightButton.onClick.AddListener(() => SendCommand("4"));
         stopButton.onClick.AddListener(() => SendCommand("0"));
+
+        ResetAllButtonColors();
     }
 
     void Update()
     {
-        // 键盘控制（新 Input System）
+        // 键盘控制
         var keyboard = Keyboard.current;
         if (keyboard != null)
         {
-            if (keyboard.wKey.isPressed) SendCommand("1");
-            if (keyboard.sKey.isPressed) SendCommand("2");
-            if (keyboard.aKey.isPressed) SendCommand("3");
-            if (keyboard.dKey.isPressed) SendCommand("4");
-            if (keyboard.spaceKey.isPressed) SendCommand("0");
+            if (keyboard.wKey.isPressed) SendCommand("1"); // 前进
+            if (keyboard.sKey.isPressed) SendCommand("2"); // 后退
+            if (keyboard.aKey.isPressed) SendCommand("3"); // 左转
+            if (keyboard.dKey.isPressed) SendCommand("4"); // 右转
+            if (keyboard.spaceKey.isPressed) SendCommand("0"); // 停止
         }
 
         // 获取手柄设备
         if (rightHandDevices.Count == 0) InputDevices.GetDevicesAtXRNode(XRNode.RightHand, rightHandDevices);
         if (leftHandDevices.Count == 0) InputDevices.GetDevicesAtXRNode(XRNode.LeftHand, leftHandDevices);
 
-        // Pico 4 Ultra ABXY 映射
-        if (GetButton(rightHandDevices, XRCommonUsages.primaryButton)) SendCommand("1");   // A 前进
-        if (GetButton(rightHandDevices, XRCommonUsages.secondaryButton)) SendCommand("2"); // B 后退
-        if (GetButton(leftHandDevices, XRCommonUsages.primaryButton)) SendCommand("3");    // X 左转
-        if (GetButton(leftHandDevices, XRCommonUsages.secondaryButton)) SendCommand("4");  // Y 右转
+        // Pico 4 Ultra ABXY 映射（修改后的）
+        if (GetButton(rightHandDevices, XRCommonUsages.primaryButton)) SendCommand("1");   // 右手 A → 前进
+        if (GetButton(leftHandDevices, XRCommonUsages.primaryButton)) SendCommand("2");    // 左手 X → 后退
+        if (GetButton(leftHandDevices, XRCommonUsages.secondaryButton)) SendCommand("3");  // 左手 Y → 左转
+        if (GetButton(rightHandDevices, XRCommonUsages.secondaryButton)) SendCommand("4"); // 右手 B → 右转
 
-        // 左右 Grip 控制停止
+        // Grip 停止
         if (GetButton(rightHandDevices, XRCommonUsages.gripButton) ||
             GetButton(leftHandDevices, XRCommonUsages.gripButton))
         {
@@ -117,7 +117,6 @@ public class CarUIController : MonoBehaviour
         }
     }
 
-    // 发送命令，不等待服务器响应
     public async void SendCommand(string command)
     {
         if (!connected || stream == null)
@@ -131,9 +130,7 @@ public class CarUIController : MonoBehaviour
             byte[] data = Encoding.UTF8.GetBytes(command + "\n");
             await stream.WriteAsync(data, 0, data.Length);
 
-            // 按钮高亮
-            if (highlightCoroutine != null) StopCoroutine(highlightCoroutine);
-            highlightCoroutine = StartCoroutine(HighlightButton(command));
+            HighlightButton(command);
         }
         catch (System.Exception e)
         {
@@ -143,8 +140,10 @@ public class CarUIController : MonoBehaviour
         }
     }
 
-    private IEnumerator HighlightButton(string command)
+    private void HighlightButton(string command)
     {
+        ResetAllButtonColors();
+
         Button b = command switch
         {
             "1" => forwardButton,
@@ -154,13 +153,21 @@ public class CarUIController : MonoBehaviour
             "0" => stopButton,
             _ => null
         };
-        if (b == null) yield break;
 
-        var img = b.GetComponent<Image>();
-        Color orig = img.color;
-        img.color = activeColor;
-        yield return new WaitForSeconds(highlightDuration);
-        img.color = orig;
+        if (b != null)
+        {
+            var img = b.GetComponent<Image>();
+            img.color = activeColor;
+        }
+    }
+
+    private void ResetAllButtonColors()
+    {
+        forwardButton.GetComponent<Image>().color = normalColor;
+        backwardButton.GetComponent<Image>().color = normalColor;
+        leftButton.GetComponent<Image>().color = normalColor;
+        rightButton.GetComponent<Image>().color = normalColor;
+        stopButton.GetComponent<Image>().color = normalColor;
     }
 
     private IEnumerator HeartbeatLoop()
@@ -169,18 +176,17 @@ public class CarUIController : MonoBehaviour
         {
             try
             {
-                byte[] data = Encoding.UTF8.GetBytes("HEARTBEAT\n");
+                byte[] data = Encoding.UTF8.GetBytes("heartbeat");
                 stream.Write(data, 0, data.Length);
-                // Debug.Log("发送心跳包");
             }
             catch (System.Exception e)
             {
                 Debug.LogError($"心跳发送失败: {e.Message}");
                 connected = false;
-                _ = Connect(); // 尝试重连
+                _ = Connect();
                 yield break;
             }
-            yield return new WaitForSeconds(heartbeatInterval); // 使用 Inspector 参数
+            yield return new WaitForSeconds(heartbeatInterval);
         }
     }
 

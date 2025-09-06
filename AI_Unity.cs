@@ -30,9 +30,10 @@ public class AIAssistant : MonoBehaviour
     public Color processingColor = Color.yellow;
     public Color successColor = Color.green;
     public Color errorColor = Color.red;
+    public Color uploadSuccessColor = Color.blue; // 上传成功提示颜色
     public float highlightDuration = 0.5f;
 
-    // ===== Coze API 配置（使用你给的设置）=====
+    // ===== Coze API 配置 =====
     const string COZE_API_KEY = "pat_amzSXxLKssT22HvzRswyVMKoco0R4QfKSdT1nwX09JTzoGKHV3qzaAxJwI8U7Cz6";
     const string COZE_FILE_UPLOAD_URL = "https://api.coze.cn/v1/files/upload";
     const string COZE_CHAT_BASE = "https://api.coze.cn/v3";
@@ -54,6 +55,9 @@ public class AIAssistant : MonoBehaviour
     {
         cameraTexture = new Texture2D(2, 2, TextureFormat.RGB24, false);
         cameraPreview.texture = cameraTexture;
+
+        // 水平翻转摄像头画面
+        cameraPreview.uvRect = new Rect(1, 0, -1, 1);
 
         aiAssistantButton.onClick.AddListener(OnAIAssistantClick);
         UpdateButtonColor(normalColor);
@@ -94,12 +98,11 @@ public class AIAssistant : MonoBehaviour
                 if (lenBuf == null) break;
 
                 uint frameLen = (uint)(lenBuf[0] << 24 | lenBuf[1] << 16 | lenBuf[2] << 8 | lenBuf[3]);
-                if (frameLen == 0 || frameLen > 2_000_000) continue; // 粗略防御
+                if (frameLen == 0 || frameLen > 2_000_000) continue;
 
                 byte[] frameData = ReadExact((int)frameLen);
                 if (frameData == null) break;
 
-                // 丢帧：只保留最新一帧，避免积压
                 if (frameQueue.Count == 0) frameQueue.Enqueue(frameData);
             }
         }
@@ -154,7 +157,6 @@ public class AIAssistant : MonoBehaviour
 
         yield return StartCoroutine(CaptureScreenshot());
 
-        // 直接调用 Coze（替代原本的本地 Flask）
         yield return StartCoroutine(CozeAnalyzeScreenshot());
 
         isProcessing = false;
@@ -179,7 +181,6 @@ public class AIAssistant : MonoBehaviour
         }
         else
         {
-            // 如果你把 RawImage 的纹理换成 RenderTexture，可改为 ReadPixels 方案
             ShowError("错误：不支持的纹理类型（期望 Texture2D）");
             yield break;
         }
@@ -187,9 +188,6 @@ public class AIAssistant : MonoBehaviour
         yield return null;
     }
 
-    /// <summary>
-    /// 用 Coze API 完成：上传图片 -> 创建对话 -> 轮询状态 -> 拉取消息 -> 解析 JSON
-    /// </summary>
     IEnumerator CozeAnalyzeScreenshot()
     {
         if (currentScreenshot == null)
@@ -198,7 +196,6 @@ public class AIAssistant : MonoBehaviour
             yield break;
         }
 
-        // 1) 上传文件
         string fileId = null;
         yield return StartCoroutine(CozeUploadImage(currentScreenshot, id => fileId = id));
         if (string.IsNullOrEmpty(fileId))
@@ -207,7 +204,8 @@ public class AIAssistant : MonoBehaviour
             yield break;
         }
 
-        // 2) 发起聊天
+        UpdateButtonColor(uploadSuccessColor);
+
         string conversationId = null;
         string chatId = null;
         yield return StartCoroutine(CozeStartChat(fileId, (cid, chid) => { conversationId = cid; chatId = chid; }));
@@ -217,7 +215,6 @@ public class AIAssistant : MonoBehaviour
             yield break;
         }
 
-        // 3) 轮询状态
         bool done = false;
         yield return StartCoroutine(CozeCheckStatus(conversationId, chatId, ok => done = ok));
         if (!done)
@@ -226,7 +223,6 @@ public class AIAssistant : MonoBehaviour
             yield break;
         }
 
-        // 4) 拉取结果
         yield return StartCoroutine(CozeFetchResult(conversationId, chatId));
     }
 
@@ -244,7 +240,6 @@ public class AIAssistant : MonoBehaviour
 
             if (req.result == UnityWebRequest.Result.Success)
             {
-                // 解析 {"code":0,"data":{"id":"...","file_name":"...","bytes":...}}
                 var resp = JsonUtility.FromJson<FileUploadResponse>(req.downloadHandler.text);
                 if (resp != null && resp.code == 0 && resp.data != null)
                     onDone?.Invoke(resp.data.id);
@@ -261,7 +256,6 @@ public class AIAssistant : MonoBehaviour
 
     IEnumerator CozeStartChat(string fileId, Action<string, string> onDone)
     {
-        // content 是对象数组，要作为字符串传给 content（content_type = object_string）
         string prompt = "你是一个菌类专家，正在对蘑菇的种类进行分析，我将传给你一张蘑菇的图片，你需要判断蘑菇的种类和生长阶段。请严格按JSON格式输出结果，包含以下字段：1. species_name（蘑菇种类中文名称），2. introduction（简要介绍，50字左右），3. growth_analysis（生长情况分析，包括生长阶段、健康状态等）。注意：只返回纯JSON对象，不要添加额外文本说明。";
         string contentArrayJson = "[{\"type\":\"text\",\"text\":\"" + EscapeJson(prompt) + "\"},{\"type\":\"image\",\"file_id\":\"" + EscapeJson(fileId) + "\"}]";
 
@@ -328,7 +322,7 @@ public class AIAssistant : MonoBehaviour
                     }
                 }
             }
-            yield return new WaitForSeconds(1.2f);
+            yield return new WaitForSeconds(1.0f);
         }
 
         onDone?.Invoke(ok);
@@ -352,10 +346,7 @@ public class AIAssistant : MonoBehaviour
                     yield break;
                 }
 
-                // 你的后端取的是 messages[0].content，这里保持一致
                 string raw = resp.data[0].content;
-
-                // Coze 有时会返回带前后文本的 JSON，这里做一次“取 JSON 对象”的容错切片
                 string jsonObject = ExtractFirstJsonObject(raw);
                 if (string.IsNullOrEmpty(jsonObject))
                 {
@@ -427,13 +418,10 @@ public class AIAssistant : MonoBehaviour
         try { client?.Close(); } catch { }
     }
 
-    // ======== 工具 & 数据结构 ========
-
-    // 把字符串作为 JSON 字符串常量嵌入（自动加引号并转义）
+    // ===== 工具 & 数据结构 =====
     static string JsonString(string plain) => "\"" + EscapeJson(plain) + "\"";
     static string EscapeJson(string s) => s.Replace("\\", "\\\\").Replace("\"", "\\\"");
 
-    // 从一段文本里提取第一个 {...} JSON 对象（简单括号计数）
     static string ExtractFirstJsonObject(string input)
     {
         if (string.IsNullOrEmpty(input)) return null;
